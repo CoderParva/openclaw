@@ -1,8 +1,6 @@
 import json
-import os
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import JsonResponse, StreamingHttpResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
-from django.views.decorators.http import require_http_methods
 from django.shortcuts import render
 from .models import Chat, Message
 
@@ -10,8 +8,6 @@ from .models import Chat, Message
 def index(request):
     return render(request, 'index.html')
 
-
-# ── CHAT CRUD ──
 
 def chat_list(request):
     chats = Chat.objects.all()
@@ -82,8 +78,6 @@ def pin_message(request, message_id):
     msg.save()
     return JsonResponse({'pinned': msg.pinned})
 
-
-# ── GROQ STREAMING ──
 
 @csrf_exempt
 def chat_stream(request, chat_id):
@@ -161,7 +155,6 @@ def chat_stream(request, chat_id):
             yield f'data: {{"error":"connection","detail":"{str(e)}"}}\n\n'
             return
 
-        # Save AI response
         if full_response:
             Message.objects.create(chat=chat, role='assistant', content=full_response)
         yield 'data: [DONE]\n\n'
@@ -169,10 +162,9 @@ def chat_stream(request, chat_id):
     response = StreamingHttpResponse(stream_response(), content_type='text/event-stream')
     response['Cache-Control'] = 'no-cache'
     response['X-Accel-Buffering'] = 'no'
+    response['Access-Control-Allow-Origin'] = '*'
     return response
 
-
-# ── EXPORT ──
 
 def export_chat(request, chat_id):
     try:
@@ -187,7 +179,6 @@ def export_chat(request, chat_id):
         lines.append(m.content)
         lines.append('')
 
-    from django.http import HttpResponse
     response = HttpResponse('\n'.join(lines), content_type='text/plain')
     filename = chat.title.lower().replace(' ', '-')[:30]
     response['Content-Disposition'] = f'attachment; filename="openclaw-{filename}.txt"'
