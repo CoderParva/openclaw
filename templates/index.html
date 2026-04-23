@@ -622,12 +622,12 @@ function saveProfile(){
 function closeM(id){document.getElementById(id).style.display='none';}
 
 // ── API KEY
-function startApp(){
+async function startApp(){
   const k=document.getElementById('key-input').value.trim();
   if(!k){document.getElementById('kerr').style.display='block';return;}
   apiKey=k;localStorage.setItem('oc_key',k);
   document.getElementById('onboarding').style.display='none';
-  setStatus(true);loadChats();
+  setStatus(true);await loadChats();
 }
 function changeKey(){document.getElementById('key-input').value=apiKey;document.getElementById('onboarding').style.display='flex';}
 function setStatus(ok){document.getElementById('apidot').className=ok?'ok':'err';document.getElementById('apitext').textContent=ok?'Groq connected':'Disconnected';}
@@ -637,7 +637,7 @@ async function loadChats(){
   const res=await fetch('/api/chats/');
   const data=await res.json();
   renderSB(data.chats);
-  if(data.chats.length){switchChat(data.chats[0].id);}else{newChat();}
+  if(data.chats.length){await switchChat(data.chats[0].id);}else{await newChat();}
 }
 async function newChat(){
   const res=await fetch('/api/chats/create/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':getCookie('csrftoken')},body:JSON.stringify({title:'New Chat'})});
@@ -757,6 +757,9 @@ function handleInp(el){el.style.height='auto';el.style.height=Math.min(el.scroll
 
 // ── SEND WITH DJANGO STREAMING
 async function sendMsg(){
+  // Create chat if none exists
+  if(!currentChatId){await newChat();}
+  if(!currentChatId){addBubble('ai','⚠ Could not create chat. Please refresh.');return;}
   if(streaming)return;
   const inp=document.getElementById('msg-inp'),text=inp.value.trim();
   if(!text||!apiKey)return;
