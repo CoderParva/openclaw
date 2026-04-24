@@ -1,12 +1,13 @@
 from pathlib import Path
+import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-SECRET_KEY = 'django-openclaw-secret-key-change-in-production'
-DEBUG = True
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-openclaw-dev-key-2026')
+DEBUG = os.environ.get('DEBUG', 'True') == 'True'
 ALLOWED_HOSTS = ['*']
 CSRF_TRUSTED_ORIGINS = [
+    'https://*.onrender.com',
     'https://*.railway.app',
-    'https://*.up.railway.app',
     'http://localhost:8000',
     'http://127.0.0.1:8000',
 ]
@@ -20,7 +21,6 @@ MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
     'whitenoise.middleware.WhiteNoiseMiddleware',
     'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
 
@@ -50,9 +50,3 @@ STATICFILES_DIRS = [BASE_DIR / 'static']
 STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-# Session settings
-SESSION_COOKIE_SAMESITE = 'None'
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SAMESITE = 'None'
-CSRF_COOKIE_SECURE = True
