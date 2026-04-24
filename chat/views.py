@@ -1,8 +1,9 @@
 import json
-from django.http import JsonResponse, StreamingHttpResponse, HttpResponse
+from django.http import JsonResponse, HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.shortcuts import render
 from .models import Chat, Message
+import httpx
 
 
 def index(request):
@@ -21,16 +22,17 @@ def chat_list(request):
     return JsonResponse({'chats': data})
 
 
-@csrf_exempt
 def chat_create(request):
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
-    body = json.loads(request.body or '{}')
+    try:
+        body = json.loads(request.body or '{}')
+    except:
+        body = {}
     chat = Chat.objects.create(title=body.get('title', 'New Chat'))
     return JsonResponse({'id': str(chat.id), 'title': chat.title})
 
 
-@csrf_exempt
 def chat_detail(request, chat_id):
     try:
         chat = Chat.objects.get(id=chat_id)
@@ -53,7 +55,10 @@ def chat_detail(request, chat_id):
         })
 
     if request.method == 'PATCH':
-        body = json.loads(request.body or '{}')
+        try:
+            body = json.loads(request.body or '{}')
+        except:
+            body = {}
         if 'title' in body:
             chat.title = body['title']
         if 'pinned' in body:
@@ -68,7 +73,6 @@ def chat_detail(request, chat_id):
     return JsonResponse({'error': 'Method not allowed'}, status=405)
 
 
-@csrf_exempt
 def pin_message(request, message_id):
     try:
         msg = Message.objects.get(id=message_id)
@@ -79,12 +83,16 @@ def pin_message(request, message_id):
     return JsonResponse({'pinned': msg.pinned})
 
 
-@csrf_exempt
 def chat_stream(request, chat_id):
+    """Non-streaming version — more reliable on free hosting"""
     if request.method != 'POST':
         return JsonResponse({'error': 'POST required'}, status=405)
 
-    body = json.loads(request.body or '{}')
+    try:
+        body = json.loads(request.body or '{}')
+    except:
+        return JsonResponse({'error': 'Invalid JSON'}, status=400)
+
     user_message = body.get('message', '').strip()
     api_key = body.get('api_key', '').strip()
     model = body.get('model', 'llama3-70b-8192')
@@ -114,56 +122,46 @@ def chat_stream(request, chat_id):
     for m in chat.messages.all():
         history.append({'role': m.role, 'content': m.content})
 
-    def stream_response():
-        import httpx
-        full_response = ''
-        try:
-            with httpx.Client(timeout=60) as client:
-                with client.stream(
-                    'POST',
-                    'https://api.groq.com/openai/v1/chat/completions',
-                    headers={
-                        'Authorization': f'Bearer {api_key}',
-                        'Content-Type': 'application/json',
-                    },
-                    json={'model': model, 'messages': history, 'stream': True},
-                ) as resp:
-                    if resp.status_code == 429:
-                        yield 'data: {"error":"rate_limit"}\n\n'
-                        return
-                    if resp.status_code == 401:
-                        yield 'data: {"error":"invalid_key"}\n\n'
-                        return
-                    if resp.status_code != 200:
-                        yield f'data: {{"error":"api_error","status":{resp.status_code}}}\n\n'
-                        return
-                    for line in resp.iter_lines():
-                        if not line or not line.startswith('data:'):
-                            continue
-                        data = line[5:].strip()
-                        if data == '[DONE]':
-                            break
-                        try:
-                            chunk = json.loads(data)
-                            delta = chunk['choices'][0]['delta'].get('content', '')
-                            if delta:
-                                full_response += delta
-                                yield f'data: {json.dumps({"delta": delta})}\n\n'
-                        except Exception:
-                            continue
-        except Exception as e:
-            yield f'data: {{"error":"connection","detail":"{str(e)}"}}\n\n'
-            return
+    # Call Groq API — NO streaming, simple response
+    try:
+        with httpx.Client(timeout=60) as client:
+            resp = client.post(
+                'https://api.groq.com/openai/v1/chat/completions',
+                headers={
+                    'Authorization': f'Bearer {api_key}',
+                    'Content-Type': 'application/json',
+                },
+                json={
+                    'model': model,
+                    'messages': history,
+                    'stream': False,  # NO streaming
+                }
+            )
 
-        if full_response:
-            Message.objects.create(chat=chat, role='assistant', content=full_response)
-        yield 'data: [DONE]\n\n'
+        if resp.status_code == 429:
+            return JsonResponse({'error': 'rate_limit'}, status=429)
+        if resp.status_code == 401:
+            return JsonResponse({'error': 'invalid_key'}, status=401)
+        if resp.status_code != 200:
+            return JsonResponse({'error': f'api_error {resp.status_code}'}, status=500)
 
-    response = StreamingHttpResponse(stream_response(), content_type='text/event-stream')
-    response['Cache-Control'] = 'no-cache'
-    response['X-Accel-Buffering'] = 'no'
-    response['Access-Control-Allow-Origin'] = '*'
-    return response
+        data = resp.json()
+        ai_message = data['choices'][0]['message']['content']
+
+        # Save AI response
+        msg = Message.objects.create(chat=chat, role='assistant', content=ai_message)
+
+        return JsonResponse({
+            'response': ai_message,
+            'message_id': msg.id,
+            'chat_title': chat.title,
+            'message_count': chat.messages.count(),
+        })
+
+    except httpx.TimeoutException:
+        return JsonResponse({'error': 'timeout'}, status=504)
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
 
 
 def export_chat(request, chat_id):

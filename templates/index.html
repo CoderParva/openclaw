@@ -640,7 +640,7 @@ async function loadChats(){
   if(data.chats.length){await switchChat(data.chats[0].id);}else{await newChat();}
 }
 async function newChat(){
-  const res=await fetch('/api/chats/create/',{method:'POST',headers:{'Content-Type':'application/json','X-CSRFToken':getCookie('csrftoken')},body:JSON.stringify({title:'New Chat'})});
+  const res=await fetch('/api/chats/create/',{method:'POST',headers:{'Content-Type':'application/json',},body:JSON.stringify({title:'New Chat'})});
   const data=await res.json();
   currentChatId=data.id;
   document.getElementById('chat-title').textContent='New Chat';
@@ -666,7 +666,7 @@ async function switchChat(id){
 }
 async function deleteChat(id,e){
   e.stopPropagation();
-  await fetch(`/api/chats/${id}/`,{method:'DELETE',headers:{'X-CSRFToken':getCookie('csrftoken')}});
+  await fetch(`/api/chats/${id}/`,{method:'DELETE',headers:{}});
   const res=await fetch('/api/chats/');
   const data=await res.json();
   renderSB(data.chats);
@@ -676,7 +676,7 @@ async function pinChatAPI(id,e){
   e.stopPropagation();
   const res=await fetch(`/api/chats/${id}/`,{method:'GET'});
   const data=await res.json();
-  await fetch(`/api/chats/${id}/`,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRFToken':getCookie('csrftoken')},body:JSON.stringify({pinned:!data.pinned})});
+  await fetch(`/api/chats/${id}/`,{method:'PATCH',headers:{'Content-Type':'application/json',},body:JSON.stringify({pinned:!data.pinned})});
   const res2=await fetch('/api/chats/');
   renderSB((await res2.json()).chats);
   toast('Chat pinned 📌');
@@ -706,7 +706,7 @@ function openRename(id){
 async function doRename(){
   const v=document.getElementById('rinput').value.trim();
   if(v&&renaming){
-    await fetch(`/api/chats/${renaming}/`,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRFToken':getCookie('csrftoken')},body:JSON.stringify({title:v})});
+    await fetch(`/api/chats/${renaming}/`,{method:'PATCH',headers:{'Content-Type':'application/json',},body:JSON.stringify({title:v})});
     if(renaming===currentChatId)document.getElementById('chat-title').textContent=v;
     const res=await fetch('/api/chats/');renderSB((await res.json()).chats);
   }
@@ -739,7 +739,7 @@ function fmt(t){
 }
 function copyMsg(btn){const t=btn.closest('.mwrap').querySelector('.bubble').innerText;navigator.clipboard.writeText(t).then(()=>{btn.textContent='✅';setTimeout(()=>btn.textContent='📋 Copy',2000);});}
 async function pinMsgAPI(id,btn){
-  const res=await fetch(`/api/messages/${id}/pin/`,{method:'POST',headers:{'X-CSRFToken':getCookie('csrftoken')}});
+  const res=await fetch(`/api/messages/${id}/pin/`,{method:'POST',headers:{}});
   const data=await res.json();
   toast(data.pinned?'Message pinned 📌':'Unpinned');
   btn.style.color=data.pinned?'var(--warn)':'';
@@ -775,43 +775,27 @@ async function sendMsg(){
   try{
     const res=await fetch(`/api/chats/${currentChatId}/stream/`,{
       method:'POST',
-      headers:{'Content-Type':'application/json','X-CSRFToken':getCookie('csrftoken')},
+      headers:{'Content-Type':'application/json'},
       body:JSON.stringify({message:text,api_key:apiKey,model})
     });
     document.getElementById('tr')?.remove();
+    const data=await res.json();
     if(!res.ok){
-      const err=await res.json().catch(()=>({}));
-      addBubble('ai','⚠ Error: '+(err.error||res.statusText));
+      if(res.status===429){document.getElementById('rate-notice').style.display='block';addBubble('ai','⚠ Rate limit reached. Please wait a moment.');}
+      else if(res.status===401){setStatus(false);addBubble('ai','⚠ Invalid API key. Please check and try again.');}
+      else{addBubble('ai','⚠ Error: '+(data.error||res.statusText));}
       streaming=false;document.getElementById('send-btn').disabled=false;return;
     }
-    const bub=addBubble('ai','',true,null,false,null);
-    let full='';
-    const reader=res.body.getReader(),dec=new TextDecoder();
-    while(true){
-      const {done,value}=await reader.read();if(done)break;
-      for(const line of dec.decode(value).split('\n')){
-        if(!line.startsWith('data:'))continue;
-        const d=line.slice(5).trim();if(d==='[DONE]')break;
-        try{
-          const j=JSON.parse(d);
-          if(j.error==='rate_limit'){document.getElementById('rate-notice').style.display='block';bub.innerHTML='⚠ Rate limit reached. Please wait.';break;}
-          if(j.error==='invalid_key'){setStatus(false);bub.innerHTML='⚠ Invalid API key.';break;}
-          if(j.delta){full+=j.delta;bub.innerHTML=fmt(full);msgs.scrollTop=msgs.scrollHeight;}
-        }catch{}
-      }
-    }
-    if(ttsOn&&full)window.speechSynthesis.speak(new SpeechSynthesisUtterance(full.slice(0,500)));
+    addBubble('ai',data.response,true,null,false,data.message_id);
+    if(ttsOn&&data.response)window.speechSynthesis.speak(new SpeechSynthesisUtterance(data.response.slice(0,500)));
     document.getElementById('regen-btn').style.display='flex';
     setStatus(true);
-    // refresh chat title
-    const cr=await fetch(`/api/chats/${currentChatId}/`);
-    const cd=await cr.json();
-    document.getElementById('chat-title').textContent=cd.title;
-    document.getElementById('chat-sub').textContent=cd.messages.length+' messages';
+    document.getElementById('chat-title').textContent=data.chat_title;
+    document.getElementById('chat-sub').textContent=data.message_count+' messages';
     const sr=await fetch('/api/chats/');renderSB((await sr.json()).chats);
   }catch(e){
     document.getElementById('tr')?.remove();
-    addBubble('ai','⚠ Connection error. Make sure the Django server is running!');
+    addBubble('ai','⚠ Connection error: '+e.message);
   }
   streaming=false;document.getElementById('send-btn').disabled=false;
 }
@@ -821,7 +805,7 @@ async function regen(){
   if(data.messages.length<1)return;
   const lastMsg=data.messages[data.messages.length-1];
   if(lastMsg.role==='assistant'){
-    await fetch(`/api/chats/${currentChatId}/`,{method:'PATCH',headers:{'Content-Type':'application/json','X-CSRFToken':getCookie('csrftoken')},body:JSON.stringify({})});
+    await fetch(`/api/chats/${currentChatId}/`,{method:'PATCH',headers:{'Content-Type':'application/json',},body:JSON.stringify({})});
   }
   switchChat(currentChatId);
 }
